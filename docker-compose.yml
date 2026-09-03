@@ -1,0 +1,74 @@
+services:
+
+  spark:
+    build:
+      context: .
+      dockerfile: Dockerfile
+
+    image: tradecorp_spark:latest
+    container_name: tradecorp_spark
+
+    ports:
+      - "8888:8888"
+      - "4040:4040"
+
+    volumes:
+      - ./data:/home/jovyan/data
+      - ./notebooks:/home/jovyan/work
+      - ./src:/home/jovyan/src
+      - ./tests:/home/jovyan/tests
+      - ./.env:/home/jovyan/.env
+
+    environment:
+      JUPYTER_ENABLE_LAB: "yes"
+
+      PYTHONPATH: "/usr/local/spark/python:/usr/local/spark/python/lib/py4j-0.10.9.9-src.zip"
+
+      AZURE_STORAGE_ACCOUNT_NAME: ${AZURE_STORAGE_ACCOUNT_NAME}
+      AZURE_STORAGE_ACCOUNT_KEY: ${AZURE_STORAGE_ACCOUNT_KEY}
+
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+
+  postgres:
+    image: postgres:16
+    container_name: tradecorp_postgres
+
+    environment:
+      POSTGRES_USER: tradecorp
+      POSTGRES_PASSWORD: tradecorp
+      POSTGRES_DB: tradecorp
+
+    ports:
+      - "5434:5432"
+
+    volumes:
+      - postgresdata:/var/lib/postgresql/data
+
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tradecorp -d tradecorp"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: tradecorp_pgadmin
+
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@admin.com
+      PGADMIN_DEFAULT_PASSWORD: admin
+
+    ports:
+      - "8082:80"
+
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+
+volumes:
+  postgresdata:

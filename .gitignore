@@ -1,0 +1,11 @@
+
+.env
+.env.*
+__pycache__/
+.pytest_cache/
+.ipynb_checkpoints/
+data/tmp/
+*.parquet
+_SUCCESS
+.sparkStaging/
+*.csv 
