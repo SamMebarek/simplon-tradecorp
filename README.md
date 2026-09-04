@@ -171,7 +171,7 @@ La réponse JSON est conservée dans ADLS.
 
 # Structure du projet
 
-```
+```text
 tradecorp/
 │
 ├── data/
