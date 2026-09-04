@@ -1,4 +1,3 @@
-```markdown
 # TradeCorp International — Data Engineering Pipeline
 
 Projet de data engineering réalisé avec **Apache Spark / PySpark**, **Docker**, **PostgreSQL** et **Azure Data Lake Storage Gen2**.
@@ -76,7 +75,6 @@ Le projet suit une architecture de type **Raw → Transform → Enrich → Clean
 │  └── orders_enriched/                                   │
 │      └── *.parquet                                      │
 └──────────────────────────────────────────────────────────┘
-```
 
 Le script `pipeline.py` orchestre les différentes étapes du traitement.
 
