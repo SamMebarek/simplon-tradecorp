@@ -1,8 +1,8 @@
 # TradeCorp International — Data Engineering Pipeline
 
-Projet de data engineering réalisé avec **Apache Spark / PySpark**, **Docker**, **PostgreSQL** et **Azure Data Lake Storage Gen2**.
+Projet de data engineering réalisé avec **Apache Spark / PySpark**, **Docker**, **Azure Data Lake Storage Gen2** et **Apache Airflow**.
 
-L'objectif est de mettre en place un pipeline de données modulaire capable de :
+L’objectif est de mettre en place un pipeline de données modulaire capable de :
 
 - récupérer les données métier depuis Azure Data Lake Storage Gen2 ;
 - nettoyer et transformer les données avec PySpark ;
@@ -10,73 +10,39 @@ L'objectif est de mettre en place un pipeline de données modulaire capable de :
 - enrichir les commandes avec la devise du pays du client ;
 - appliquer les taux de change du jour ;
 - produire un dataset consolidé au format Parquet ;
-- déposer le résultat dans la zone `clean` d'ADLS ;
+- déposer le résultat dans la zone `clean` d’ADLS ;
+- automatiser l’exécution quotidienne avec Airflow ;
 - valider les transformations avec des tests automatisés.
 
 ---
 
-## Architecture générale
+# Architecture générale
 
-Le projet suit une architecture de type **Raw → Transform → Enrich → Clean**.
+Le projet suit une architecture de type :
 
-```text
-                        ┌─────────────────────┐
-                        │   Exchange Rate API │
-                        │ exchangerate-api.com│
-                        └──────────┬──────────┘
-                                   │
-                                   ▼
-                        fetch_exchange_rates.py
-                                   │
-                                   ▼
-┌──────────────────────────────────────────────────────────┐
-│                 Azure Data Lake Storage                  │
-│                                                          │
-│  raw/                                                    │
-│  ├── categories.csv                                      │
-│  ├── customers.csv                                       │
-│  ├── employees.csv                                       │
-│  ├── order_details.csv                                   │
-│  ├── orders.csv                                          │
-│  ├── products.csv                                        │
-│  ├── shippers.csv                                        │
-│  ├── suppliers.csv                                       │
-│  └── reference/                                          │
-│      ├── country_currency.csv                            │
-│      └── exchange_rates.json                            │
-└───────────────────────┬──────────────────────────────────┘
-                        │
-                        ▼
-                    reader.py
-                        │
-                        ▼
-               DataFrames PySpark
-                        │
-                        ▼
-                  transformer.py
-                        │
-                        ▼
-                 DataFrame enrichi
-                        │
-                        ▼
-                  enrichment.py
-                        │
-                        ▼
-          currency + sous_total_local
-                        │
-                        ▼
-                     writer.py
-                        │
-                        ▼
-┌──────────────────────────────────────────────────────────┐
-│                    ADLS - clean                          │
-│                                                          │
-│  clean/                                                  │
-│  └── orders_enriched/                                   │
-│      └── *.parquet                                      │
-└──────────────────────────────────────────────────────────┘
+```
+Raw → Read → Transform → Enrich → Clean
+```
 
-Le script `pipeline.py` orchestre les différentes étapes du traitement.
+Le flux général est :
+
+```
+Exchange Rate API
+        ↓
+fetch_exchange_rates.py
+        ↓
+ADLS raw/
+        ↓
+reader.py
+        ↓
+transformer.py
+        ↓
+enrichment.py
+        ↓
+writer.py
+        ↓
+ADLS clean/orders_enriched/
+```
 
 ---
 
@@ -84,52 +50,45 @@ Le script `pipeline.py` orchestre les différentes étapes du traitement.
 
 ## Apache Spark / PySpark
 
-Spark est utilisé comme moteur principal de traitement.
+Spark constitue le moteur principal de traitement.
 
-Il permet de :
+Il est utilisé pour :
 
-- charger les fichiers CSV sous forme de DataFrames ;
+- lire les fichiers CSV et Parquet ;
 - nettoyer les données ;
-- effectuer les jointures entre les différentes tables ;
+- effectuer les jointures ;
 - calculer les colonnes métier ;
-- produire les données finales au format Parquet.
+- enrichir les données ;
+- produire les fichiers Parquet.
 
-Le choix de Spark permet également de conserver une architecture adaptée à des volumes de données plus importants que ceux utilisés dans le cadre du projet.
-
----
+Spark permet également de conserver une architecture adaptée à des volumes de données plus importants.
 
 ## Docker / Docker Compose
 
-Docker permet d'exécuter l'environnement de manière reproductible et isolée.
-
-Docker Compose orchestre :
+Docker fournit un environnement reproductible contenant :
 
 - Spark / PySpark ;
 - Jupyter ;
+- Airflow ;
+- PostgreSQL pour les métadonnées Airflow ;
+- pgAdmin.
 
-Cela permet d'éviter une installation locale complexe de Spark et Java.
-
----
+Les différents composants du projet peuvent ainsi fonctionner sans installation locale complexe de Spark, Java ou Airflow.
 
 ## Azure Data Lake Storage Gen2
 
-ADLS constitue le stockage principal du pipeline.
+ADLS constitue le stockage principal du projet.
 
 Deux zones sont utilisées :
 
 ```
 raw/
-```
-
-pour les données sources et les fichiers de référence,
-
-et :
-
-```
 clean/
 ```
 
-pour les données transformées.
+La zone `raw` contient les données sources et les fichiers de référence.
+
+La zone `clean` contient le dataset transformé final au format Parquet.
 
 Le projet utilise le SDK Python :
 
@@ -137,47 +96,38 @@ Le projet utilise le SDK Python :
 azure-storage-blob
 ```
 
-pour télécharger et uploader les fichiers.
+pour communiquer avec Azure.
 
----
+## Apache Airflow
 
----
+Airflow orchestre le pipeline et assure :
+
+- l’ordre d’exécution des tâches ;
+- la planification quotidienne ;
+- les retries ;
+- la centralisation des logs ;
+- le suivi de l’état du pipeline depuis une interface web.
 
 ## Pytest
 
-Les transformations critiques sont couvertes par des tests automatisés.
-
-Les tests sont exécutés dans l'environnement Spark afin de tester directement les fonctions manipulant des DataFrames PySpark.
-
----
-
-## API de taux de change
-
-Les taux sont récupérés depuis l'API gratuite :
-
-```
-https://api.exchangerate-api.com/v4/latest/USD
-```
-
-Cette API :
-
-- ne nécessite pas de compte ;
-- ne nécessite pas de clé API ;
-- retourne les taux avec une base USD.
-
-La réponse JSON est conservée dans ADLS.
+Pytest permet de tester les transformations principales du pipeline directement sur des DataFrames PySpark.
 
 ---
 
 # Structure du projet
 
-```text
+```
 tradecorp/
+│
+├── dags/
+│   └── tradecorp_pipeline.py
 │
 ├── data/
 │   └── tmp/
 │       ├── tradecorp_raw/
 │       ├── tradecorp_reference/
+│       ├── reader_output/
+│       ├── transformer_output/
 │       └── tradecorp_clean/
 │
 ├── notebooks/
@@ -189,13 +139,16 @@ tradecorp/
 │   ├── enrichment.py
 │   ├── writer.py
 │   ├── pipeline.py
-│   ├── fetch_exchange_rates.py
+│   └── fetch_exchange_rates.py
 │
 ├── tests/
 │   ├── test_transformers.py
 │   └── run_tests.py
 │
+├── Dockerfile
+├── Dockerfile.airflow
 ├── docker-compose.yml
+├── requirements.txt
 ├── .env
 ├── .gitignore
 └── README.md
@@ -203,251 +156,9 @@ tradecorp/
 
 ---
 
-# Rôle des modules
-
-## `src/utils.py`
-
-Contient les fonctions communes utilisées par le pipeline.
-
-Il regroupe notamment :
-
-- la connexion à Azure Blob Storage ;
-- le nettoyage des chaînes de caractères ;
-- les conversions de types ;
-- le nettoyage des clients ;
-- le nettoyage des commandes ;
-- le nettoyage des détails de commandes ;
-- le calcul du sous-total ;
-- la création du nom complet des employés ;
-- la gestion du stock des produits.
-
-Exemples de colonnes calculées :
-
-```
-full_name
-is_shipped
-en_stock
-sous_total
-```
-
-Le sous-total est calculé selon :
-
-```
-sous_total = prix_unitaire × quantite × (1 - discount)
-```
-
----
-
-## `src/reader.py`
-
-Le reader est responsable de la récupération des données.
-
-Il télécharge les 8 fichiers métier depuis :
-
-```
-ADLS raw/
-```
-
-vers :
-
-```
-/home/jovyan/data/tmp/tradecorp_raw/
-```
-
-Il télécharge également les fichiers de référence :
-
-```
-raw/reference/country_currency.csv
-raw/reference/exchange_rates.json
-```
-
-vers :
-
-```
-/home/jovyan/data/tmp/tradecorp_reference/
-```
-
-Les CSV métier sont ensuite chargés sous forme de DataFrames Spark.
-
----
-
-## `src/transformer.py`
-
-Le transformer applique les fonctions de nettoyage puis construit le DataFrame métier enrichi.
-
-Les principales sources utilisées sont :
-
-```
-orders
-order_details
-customers
-products
-categories
-employees
-shippers
-```
-
-Les jointures permettent notamment d'obtenir :
-
-```
-order_id
-customer_id
-employee_id
-product_id
-order_date
-required_date
-shipped_date
-freight
-prix_unitaire
-quantite
-discount
-sous_total
-customer_name
-customer_country
-customer_city
-product_name
-category_name
-full_name
-shipper_name
-is_shipped
-en_stock
-```
-
----
-
-## `src/enrichment.py`
-
-Ce module ajoute les informations de devise au DataFrame métier.
-
-Le fichier :
-
-```
-country_currency.csv
-```
-
-permet d'associer :
-
-```
-pays → devise
-```
-
-Exemple :
-
-```
-FRANCE → EUR
-USA → USD
-CANADA → CAD
-```
-
-Le fichier :
-
-```
-exchange_rates.json
-```
-
-permet ensuite d'obtenir le taux de change correspondant.
-
-Deux colonnes principales sont ajoutées :
-
-```
-currency
-sous_total_local
-```
-
-Le calcul appliqué est :
-
-```
-sous_total_local = sous_total × exchange_rate
-```
-
----
-
-## `src/writer.py`
-
-Le writer est chargé de produire le résultat final.
-
-Le DataFrame est d'abord écrit localement en Parquet dans :
-
-```
-/home/jovyan/data/tmp/tradecorp_clean/orders_enriched/
-```
-
-Les fichiers sont ensuite uploadés vers :
-
-```
-ADLS clean/orders_enriched/
-```
-
----
-
-## `src/fetch_exchange_rates.py`
-
-Script Python indépendant de Spark.
-
-Il appelle :
-
-```
-https://api.exchangerate-api.com/v4/latest/USD
-```
-
-puis enregistre la réponse JSON brute dans :
-
-```
-raw/reference/exchange_rates.json
-```
-
-La récupération des taux est volontairement séparée du pipeline Spark.
-
-Cela permet ensuite à un orchestrateur comme Airflow d'exécuter :
-
-```
-fetch_exchange_rates
-        ↓
-pipeline
-```
-
----
-
-## `src/pipeline.py`
-
-Point d'entrée principal du traitement.
-
-Le pipeline orchestre :
-
-```
-Lecture
-   ↓
-Transformation
-   ↓
-Lecture des références
-   ↓
-Enrichissement devise
-   ↓
-Écriture Parquet
-   ↓
-Upload ADLS
-```
-
-Le script utilise le module Python `logging` pour tracer les différentes étapes.
-
-Une structure :
-
-```python
-try:
-    ...
-except Exception:
-    ...
-finally:
-    spark.stop()
-```
-
-garantit l'arrêt de la SparkSession même lorsqu'une erreur survient.
-
----
-
 # Données utilisées
 
-Le pipeline travaille sur les huit fichiers métier suivants :
+Le pipeline travaille avec huit fichiers métier :
 
 ```
 categories.csv
@@ -460,116 +171,231 @@ shippers.csv
 suppliers.csv
 ```
 
-Ils doivent être présents dans le conteneur ADLS :
+Ils sont stockés dans :
 
 ```
-raw/
+ADLS raw/
 ```
 
-Les fichiers de référence sont stockés dans :
+Deux fichiers de référence sont également utilisés :
 
 ```
-raw/reference/
+raw/reference/country_currency.csv
+raw/reference/exchange_rates.json
 ```
 
-avec :
+`country_currency.csv` associe un pays à sa devise.
+
+`exchange_rates.json` contient les taux récupérés depuis :
 
 ```
-country_currency.csv
-exchange_rates.json
+https://api.exchangerate-api.com/v4/latest/USD
 ```
 
 ---
 
-# Prérequis
+# Rôle des principaux modules
 
-Pour exécuter le projet, il faut disposer de :
+## `src/utils.py`
 
-- Docker Desktop ;
-- Docker Compose ;
-- Git ;
-- un compte Azure ;
-- un Storage Account Azure configuré ;
-- les conteneurs ADLS `raw` et `clean`.
+Contient les fonctions communes du projet :
 
-Sous Windows, Docker Desktop doit être démarré avant l'exécution des commandes.
+- connexion à Azure Blob Storage ;
+- nettoyage des chaînes ;
+- conversion des types ;
+- nettoyage des clients ;
+- nettoyage des commandes ;
+- nettoyage des détails de commande ;
+- nettoyage des produits ;
+- nettoyage des employés ;
+- calcul du sous-total.
+
+Le sous-total est calculé avec :
+
+```
+sous_total = prix_unitaire × quantite × (1 - discount)
+```
+
+---
+
+## `src/reader.py`
+
+Le reader :
+
+- télécharge les fichiers métier depuis ADLS ;
+- télécharge les fichiers de référence ;
+- lit les CSV avec Spark ;
+- écrit les DataFrames métier dans un stockage intermédiaire partagé.
+
+Sortie intermédiaire :
+
+```
+/home/jovyan/data/tmp/reader_output/
+```
+
+---
+
+## `src/transformer.py`
+
+Le transformer lit les données produites par le reader puis applique :
+
+- les fonctions de nettoyage ;
+- les jointures entre les tables ;
+- la sélection du schéma final ;
+- l’enrichissement avec les devises et les taux de change.
+
+Le résultat est écrit dans :
+
+```
+/home/jovyan/data/tmp/transformer_output/orders_enriched/
+```
+
+Le dataset contient notamment :
+
+```
+order_id
+customer_id
+employee_id
+product_id
+order_date
+freight
+prix_unitaire
+quantite
+discount
+sous_total
+customer_name
+customer_country
+customer_city
+product_name
+category_name
+full_name
+shipper_name
+currency
+exchange_rate
+sous_total_local
+```
+
+---
+
+## `src/enrichment.py`
+
+Ce module associe le pays du client à sa devise grâce à :
+
+```
+country_currency.csv
+```
+
+puis récupère le taux correspondant depuis :
+
+```
+exchange_rates.json
+```
+
+Le montant local est calculé avec :
+
+```
+sous_total_local = sous_total × exchange_rate
+```
+
+---
+
+## `src/writer.py`
+
+Le writer :
+
+1. lit le Parquet produit par `transformer.py` ;
+2. écrit le résultat final localement ;
+3. nettoie l’ancien contenu dans ADLS ;
+4. upload le nouveau Parquet dans :
+
+```
+clean/orders_enriched/
+```
+
+Le nettoyage préalable du dossier distant garantit l’idempotence du pipeline.
+
+---
+
+## `src/fetch_exchange_rates.py`
+
+Ce script récupère les taux de change depuis l’API :
+
+```
+https://api.exchangerate-api.com/v4/latest/USD
+```
+
+puis enregistre la réponse dans :
+
+```
+raw/reference/exchange_rates.json
+```
+
+Ce script ne nécessite pas Spark.
+
+---
+
+## `src/pipeline.py`
+
+`pipeline.py` permet de lancer manuellement l’ensemble du traitement hors Airflow.
+
+Dans l’orchestration Airflow, les différentes étapes sont désormais exécutées séparément par les tâches du DAG.
 
 ---
 
 # Installation
 
+## Prérequis
+
+Il faut disposer de :
+
+- Docker Desktop ;
+- Docker Compose ;
+- Git ;
+- un compte Azure ;
+- un Storage Account Azure ;
+- les conteneurs ADLS `raw` et `clean`.
+
+---
+
 ## 1. Cloner le dépôt
 
 ```powershell
 git clone https://github.com/SamMebarek/simplon-tradecorp.git
-```
-
-Puis :
-
-```powershell
 cd simplon-tradecorp
 ```
 
 ---
 
-## 2. Configurer les variables d'environnement
+## 2. Configurer les variables d’environnement
 
-Créer un fichier :
+Créer un fichier `.env` à la racine du projet.
 
-```
-.env
-```
-
-à la racine du projet.
-
-Il doit contenir les informations Azure attendues par :
-
-```python
-get_blob_service_client()
-```
-
-dans :
+Il doit notamment contenir les informations nécessaires à la connexion Azure :
 
 ```
-src/utils.py
+AZURE_STORAGE_ACCOUNT_NAME=...
+AZURE_STORAGE_ACCOUNT_KEY=...
 ```
 
-Le fichier `.env` contient des informations sensibles et ne doit pas être versionné.
-
-Il est donc présent dans `.gitignore`.
+Le fichier `.env` ne doit pas être versionné.
 
 ---
 
-## 3. Vérifier les volumes Docker
+## 3. Construire les images
 
-Le service Spark utilise notamment les volumes suivants :
-
-```yaml
-volumes:
-  - ./data:/home/jovyan/data
-  - ./notebooks:/home/jovyan/work
-  - ./src:/home/jovyan/src
-  - ./tests:/home/jovyan/tests
-  - ./.env:/home/jovyan/.env
+```powershell
+docker compose build
 ```
-
-Les fichiers temporaires du pipeline sont ainsi accessibles depuis :
-
-```
-data/tmp/
-```
-
-sur la machine hôte.
 
 ---
 
-## 4. Démarrer les conteneurs
+## 4. Démarrer l’environnement
 
 ```powershell
 docker compose up -d
 ```
 
-Vérifier leur état :
+Vérifier les conteneurs :
 
 ```powershell
 docker ps
@@ -577,92 +403,46 @@ docker ps
 
 ---
 
-# Services Docker
+# Services disponibles
 
 ## Spark / Jupyter
 
-Conteneur :
+Jupyter :
 
 ```
-tradecorp_spark
+http://localhost:8888
 ```
 
-Image :
+Spark UI :
 
 ```
-quay.io/jupyter/pyspark-notebook:latest
+http://localhost:4040
 ```
 
-Ports :
+## Airflow
+
+Interface :
 
 ```
-Jupyter   : 8888
-Spark UI  : 4040
+http://localhost:8080
 ```
 
----
-
-# Préparation des références
-
-## Mapping pays / devise
-
-Le fichier :
+Identifiants de développement :
 
 ```
-country_currency.csv
+Utilisateur : admin
+Mot de passe : admin
 ```
 
-doit être présent dans :
+## pgAdmin
+
+Interface :
 
 ```
-raw/reference/country_currency.csv
+http://localhost:8082
 ```
 
----
-
-## Récupération des taux de change
-
-Avant le premier lancement du pipeline, exécuter :
-
-```powershell
-docker exec tradecorp_spark python /home/jovyan/src/fetch_exchange_rates.py
-```
-
-Le script doit créer dans ADLS :
-
-```
-raw/reference/exchange_rates.json
-```
-
-Le pipeline pourra ensuite télécharger ce fichier.
-
----
-
-# Lancement du pipeline
-
-Une fois les fichiers de référence disponibles :
-
-```powershell
-docker exec tradecorp_spark spark-submit /home/jovyan/src/pipeline.py
-```
-
-Le pipeline doit afficher des logs similaires à :
-
-```
-Démarrage du pipeline TradeCorp
-Début de la lecture des données métier
-Lecture des données métier terminée
-Début des transformations
-Transformations terminées
-Début de la lecture des fichiers de référence
-Lecture des fichiers de référence terminée
-Début de l'enrichissement devise
-Enrichissement devise terminé
-Début de l'écriture
-Écriture terminée
-Pipeline TradeCorp terminé avec succès
-Arrêt de la SparkSession
-```
+La base PostgreSQL utilisée par Airflow contient ses métadonnées : DAG runs, tâches, utilisateurs et états d’exécution.
 
 ---
 
@@ -674,54 +454,14 @@ Les tests sont définis dans :
 tests/test_transformers.py
 ```
 
-Ils couvrent actuellement :
+Ils vérifient notamment :
 
-### Nettoyage des commandes
+- le nettoyage des commandes ;
+- le calcul du sous-total ;
+- le nettoyage des clients ;
+- l’enrichissement avec une devise et un taux de change.
 
-Vérifie que les commandes dont :
-
-```
-shipped_date = NULL
-```
-
-sont supprimées.
-
-### Calcul du sous-total
-
-Vérifie :
-
-```
-10 × 2 × (1 - 0.1) = 18
-```
-
-### Nettoyage des clients
-
-Vérifie notamment :
-
-```
-"   jean dupont   " → "Jean Dupont"
-" france "         → "FRANCE"
-```
-
-### Enrichissement devise
-
-Utilise un taux simulé dans le test afin de ne dépendre d'aucun appel réseau.
-
-Exemple :
-
-```python
-exchange_rates = {
-    "base": "USD",
-    "rates": {
-        "USD": 1.0,
-        "EUR": 0.8
-    }
-}
-```
-
----
-
-## Lancer les tests
+Pour exécuter les tests :
 
 ```powershell
 docker exec tradecorp_spark spark-submit /home/jovyan/tests/run_tests.py
@@ -730,14 +470,174 @@ docker exec tradecorp_spark spark-submit /home/jovyan/tests/run_tests.py
 Résultat attendu :
 
 ```
-collected 4 items
-
 4 passed
 ```
 
 ---
 
-# Vérifier le résultat Parquet
+# Exécution manuelle du pipeline
+
+Les taux de change peuvent être récupérés manuellement avec :
+
+```powershell
+docker exec tradecorp_spark python /home/jovyan/src/fetch_exchange_rates.py
+```
+
+Le pipeline complet peut également être lancé hors Airflow avec :
+
+```powershell
+docker exec tradecorp_spark spark-submit /home/jovyan/src/pipeline.py
+```
+
+---
+
+# Jalon 3 : Orchestration avec Apache Airflow
+
+Le Jalon 3 automatise l’exécution du pipeline TradeCorp.
+
+Airflow ne contient pas de nouvelle logique de transformation : il orchestre les scripts existants dans le bon ordre.
+
+## Architecture du DAG
+
+Le DAG est défini dans :
+
+```
+dags/tradecorp_pipeline.py
+```
+
+Son identifiant est :
+
+```
+tradecorp_etl_pipeline
+```
+
+Il contient quatre tâches :
+
+```
+fetch_exchange_rates
+        ↓
+      reader
+        ↓
+   transformer
+        ↓
+      writer
+```
+
+Chaque tâche utilise un `DockerOperator` basé sur :
+
+```
+tradecorp_spark:latest
+```
+
+Le `DockerOperator` crée un conteneur temporaire contenant Spark et Java, exécute la commande puis détruit le conteneur.
+
+Airflow accède à Docker grâce au socket :
+
+```
+/var/run/docker.sock
+```
+
+---
+
+## Partage des données entre les tâches
+
+Chaque tâche s’exécute dans un conteneur différent. Un DataFrame Spark ne peut donc pas être transmis directement d’une tâche à l’autre.
+
+Le volume `data/` sert de stockage partagé :
+
+```
+reader.py
+   ↓
+data/tmp/reader_output/
+   ↓
+transformer.py
+   ↓
+data/tmp/transformer_output/orders_enriched/
+   ↓
+writer.py
+   ↓
+ADLS clean/orders_enriched/
+```
+
+Les conteneurs éphémères disposent notamment des montages :
+
+```
+src/  → /home/jovyan/src
+data/ → /home/jovyan/data
+.env  → /home/jovyan/.env
+```
+
+---
+
+## Planification Airflow
+
+Le DAG est configuré avec :
+
+```python
+start_date=datetime(2024, 1, 1)
+schedule_interval="0 6 * * *"
+catchup=False
+```
+
+Le pipeline s’exécute  automatiquement tous les jours à **6h**.
+
+Chaque tâche dispose de :
+
+```
+1 retry
+5 minutes de délai avant retry
+```
+
+`catchup=False` empêche Airflow de rejouer toutes les exécutions quotidiennes qui auraient théoriquement dû avoir lieu depuis le 1er janvier 2024.
+
+Lors de l’activation du DAG, Airflow attend simplement la prochaine exécution planifiée.
+
+---
+
+## Logs Airflow
+
+Chaque tâche possède ses propres logs dans l’interface Airflow.
+
+### Récupération des taux de change
+
+Extrait de `fetch_exchange_rates` :
+
+```
+2026-09-08 07:14:34,800 | INFO | Taux récupérés : 166 devises
+2026-09-08 07:14:34,955 | INFO | exchange_rates.json uploadé avec succès
+```
+
+### Upload du résultat final
+
+Extrait de `writer` :
+
+```
+2026-09-08 07:15:57,673 | INFO | Nombre de lignes à écrire : 2082
+2026-09-08 07:15:59,752 | INFO | Upload de orders_enriched vers ADLS
+2026-09-08 07:16:00,018 | INFO | orders_enriched envoyé dans le conteneur clean avec succès
+```
+
+Ces logs confirment la récupération de **166 devises** et l’écriture de **2082 lignes** dans le dataset final.
+
+---
+
+## Idempotence
+
+Le DAG peut être déclenché plusieurs fois sans accumuler plusieurs versions du dataset.
+
+Avant chaque nouvel upload, `writer.py` supprime les blobs déjà présents sous :
+
+```
+clean/orders_enriched/
+```
+
+puis écrit le nouveau résultat.
+
+Ainsi, plusieurs exécutions successives ne mélangent pas plusieurs fichiers Parquet correspondant à des runs différents.
+
+---
+
+# Stockage final
 
 Le résultat local est généré dans :
 
@@ -745,97 +645,67 @@ Le résultat local est généré dans :
 data/tmp/tradecorp_clean/orders_enriched/
 ```
 
-Le dataset final doit notamment contenir :
+Le résultat final est ensuite envoyé dans Azure :
+
+```
+clean/orders_enriched/
+```
+
+Le dataset contient notamment les colonnes :
 
 ```
 currency
+exchange_rate
 sous_total_local
 ```
-
-Le résultat est également envoyé dans :
-
-```
-ADLS clean/orders_enriched
-```
-
----
-
----
-
-# Gestion des fichiers temporaires
-
-Les fichiers récupérés pendant le pipeline sont conservés dans :
-
-```
-data/tmp/
-```
-
-avec l'organisation suivante :
-
-```
-data/tmp/
-├── tradecorp_raw/
-│   ├── categories.csv
-│   ├── customers.csv
-│   └── ...
-│
-├── tradecorp_reference/
-│   ├── country_currency.csv
-│   └── exchange_rates.json
-│
-└── tradecorp_clean/
-    └── orders_enriched/
-```
-
-Ces fichiers ne sont pas destinés à être versionnés.
 
 ---
 
 # Sécurité et Git
 
-Les fichiers sensibles ou générés doivent être exclus du dépôt.
-
-Exemple de `.gitignore` :
+Le `.gitignore` exclut notamment :
 
 ```
-# Variables d'environnement
 .env
 
-# Python
 __pycache__/
 *.py[cod]
 .pytest_cache/
 
-# Jupyter
 .ipynb_checkpoints/
 
-# Données temporaires
 data/tmp/
 
-# Spark / Parquet
 *.parquet
 _SUCCESS
 .sparkStaging/
 
-# Logs
 *.log
 logs/
 ```
+
+Les identifiants Azure et autres secrets doivent rester dans `.env`.
 
 ---
 
 # Commandes utiles
 
-Démarrer l'environnement :
+Démarrer l’environnement :
 
 ```powershell
 docker compose up -d
 ```
 
-Arrêter l'environnement :
+Arrêter l’environnement :
 
 ```powershell
 docker compose down
+```
+
+Reconstruire les images :
+
+```powershell
+docker compose build
 ```
 
 Afficher les conteneurs :
@@ -844,48 +714,30 @@ Afficher les conteneurs :
 docker ps
 ```
 
-Récupérer les taux :
-
-```powershell
-docker exec tradecorp_spark python /home/jovyan/src/fetch_exchange_rates.py
-```
-
 Exécuter les tests :
 
 ```powershell
 docker exec tradecorp_spark spark-submit /home/jovyan/tests/run_tests.py
 ```
 
-Lancer le pipeline :
-
-```powershell
-docker exec tradecorp_spark spark-submit /home/jovyan/src/pipeline.py
-```
-
 ---
 
-# Résultat final
+# Résultat
 
-Le projet met en place un pipeline de données modulaire avec séparation des responsabilités :
+TradeCorp dispose désormais d’un pipeline de données :
 
 ```
-reader
+ADLS raw
     ↓
-transformer
+PySpark
     ↓
-enrichment
+Transformation + enrichissement
     ↓
-writer
+Parquet
+    ↓
+ADLS clean
 ```
 
-Les données métier sont récupérées depuis la zone `raw` d'Azure Data Lake Storage, nettoyées et enrichies avec PySpark, puis écrites au format Parquet dans la zone `clean`.
+orchestré automatiquement par Apache Airflow
 
-L'enrichissement final permet notamment d'obtenir :
-
-```
-customer_country
-currency
-sous_total
-exchange_rate
-sous_total_local
-```
+Le pipeline est modulaire, testé, planifié quotidiennement, observable depuis l’interface Airflow et idempotent afin d’éviter l’accumulation de résultats issus de plusieurs exécutions.
