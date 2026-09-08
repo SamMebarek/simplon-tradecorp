@@ -21,37 +21,76 @@ services:
 
     environment:
       JUPYTER_ENABLE_LAB: "yes"
-
       PYTHONPATH: "/usr/local/spark/python:/usr/local/spark/python/lib/py4j-0.10.9.9-src.zip"
 
       AZURE_STORAGE_ACCOUNT_NAME: ${AZURE_STORAGE_ACCOUNT_NAME}
       AZURE_STORAGE_ACCOUNT_KEY: ${AZURE_STORAGE_ACCOUNT_KEY}
 
-    depends_on:
-      postgres:
-        condition: service_healthy
 
-
-  postgres:
+  airflow_postgres:
     image: postgres:16
-    container_name: tradecorp_postgres
+    container_name: tradecorp_airflow_postgres
 
     environment:
-      POSTGRES_USER: tradecorp
-      POSTGRES_PASSWORD: tradecorp
-      POSTGRES_DB: tradecorp
-
-    ports:
-      - "5434:5432"
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
 
     volumes:
-      - postgresdata:/var/lib/postgresql/data
+      - airflow_postgres_data:/var/lib/postgresql/data
 
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U tradecorp -d tradecorp"]
+      test: ["CMD-SHELL", "pg_isready -U airflow -d airflow"]
       interval: 5s
       timeout: 5s
       retries: 5
+
+
+  airflow:
+    build:
+      context: .
+      dockerfile: Dockerfile.airflow
+
+    container_name: tradecorp_airflow
+
+    depends_on:
+      airflow_postgres:
+        condition: service_healthy
+
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@airflow_postgres:5432/airflow
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AZURE_STORAGE_ACCOUNT_NAME: ${AZURE_STORAGE_ACCOUNT_NAME}
+      AZURE_STORAGE_ACCOUNT_KEY: ${AZURE_STORAGE_ACCOUNT_KEY}
+
+    ports:
+      - "8080:8080"
+
+    volumes:
+      - ./dags:/opt/airflow/dags
+      - ./src:/opt/airflow/src
+      - ./.env:/opt/airflow/.env
+      - /var/run/docker.sock:/var/run/docker.sock
+
+    command:
+      - bash
+      - -c
+      - |
+        set -e
+
+        airflow db migrate
+
+        airflow users create \
+          --username admin \
+          --password admin \
+          --firstname Admin \
+          --lastname Admin \
+          --role Admin \
+          --email admin@admin.com || true
+
+        airflow webserver &
+        exec airflow scheduler
 
 
   pgadmin:
@@ -66,9 +105,9 @@ services:
       - "8082:80"
 
     depends_on:
-      postgres:
+      airflow_postgres:
         condition: service_healthy
 
 
 volumes:
-  postgresdata:
+  airflow_postgres_data:

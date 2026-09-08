@@ -1,4 +1,6 @@
+import os
 import sys
+import json
 import logging
 
 from pyspark.sql import SparkSession
@@ -15,11 +17,87 @@ from src.utils import (
     clean_products,
 )
 
+from src.enrichment import add_currency_column
+
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s"
 )
 
 logger = logging.getLogger("TradeCorpTransformer")
+
+
+# ============================================================
+# Chemins partagés entre les conteneurs Airflow
+# ============================================================
+
+INPUT_DIR = "/home/jovyan/data/tmp/reader_output"
+
+REFERENCE_DIR = "/home/jovyan/data/tmp/tradecorp_reference"
+
+OUTPUT_DIR = "/home/jovyan/data/tmp/transformer_output/orders_enriched"
+
+
+TABLES = [
+    "categories",
+    "customers",
+    "employees",
+    "order_details",
+    "orders",
+    "products",
+    "shippers",
+    "suppliers",
+]
+
+
+# ============================================================
+# Lecture des données produites par reader.py
+# ============================================================
+
+
+def read_intermediate_data(spark, input_dir=INPUT_DIR):
+
+    dataframes = {}
+
+    for table_name in TABLES:
+
+        path = os.path.join(input_dir, table_name)
+
+        logger.info(f"Lecture intermédiaire de {table_name} depuis {path}")
+
+        dataframes[table_name] = spark.read.parquet(path)
+
+    return dataframes
+
+
+# ============================================================
+# Lecture des fichiers de référence
+# ============================================================
+
+
+def read_reference_data(spark, reference_dir=REFERENCE_DIR):
+
+    country_currency_path = os.path.join(reference_dir, "country_currency.csv")
+
+    exchange_rates_path = os.path.join(reference_dir, "exchange_rates.json")
+
+    logger.info("Lecture de country_currency.csv")
+
+    country_currency = spark.read.csv(
+        country_currency_path, header=True, inferSchema=True
+    )
+
+    logger.info("Lecture de exchange_rates.json")
+
+    with open(exchange_rates_path, "r", encoding="utf-8") as file:
+
+        exchange_rates = json.load(file)
+
+    return country_currency, exchange_rates
+
+
+# ============================================================
+# Transformation
+# ============================================================
 
 
 def transform(dataframes):
@@ -98,7 +176,7 @@ def transform(dataframes):
     )
 
     # ========================================================
-    # 5. Sélection du schéma final attendu
+    # 5. Sélection du schéma
     # ========================================================
 
     enriched = enriched.select(
@@ -129,43 +207,90 @@ def transform(dataframes):
 
 
 # ============================================================
-# TEST DIRECT DU FICHIER
+# Écriture intermédiaire pour writer.py
+# ============================================================
+
+
+def write_intermediate_data(dataframe, output_dir=OUTPUT_DIR):
+
+    logger.info(f"Écriture du résultat transformé vers {output_dir}")
+
+    dataframe.write.mode("overwrite").parquet(output_dir)
+
+    logger.info("Résultat intermédiaire sauvegardé avec succès")
+
+
+# ============================================================
+# Main
 # ============================================================
 
 
 def main():
 
-    from src.reader import download_files, read_files
-
     spark = SparkSession.builder.appName("TradeCorpTransformer").getOrCreate()
 
     try:
 
-        logger.info("Téléchargement des fichiers")
+        # ----------------------------
+        # Lecture sortie reader
+        # ----------------------------
 
-        local_paths = download_files()
+        logger.info("Lecture des données produites par reader.py")
 
-        logger.info("Lecture des fichiers")
+        dataframes = read_intermediate_data(spark)
 
-        dataframes = read_files(spark, local_paths)
+        # ----------------------------
+        # Transformation métier
+        # ----------------------------
 
-        logger.info("Construction du DataFrame enrichi")
+        logger.info("Début des transformations")
 
         enriched = transform(dataframes)
 
-        logger.info("Schéma du DataFrame final")
+        logger.info("Transformations terminées")
 
-        enriched.printSchema()
+        # ----------------------------
+        # Lecture des références
+        # ----------------------------
+
+        logger.info("Lecture des données de référence")
+
+        country_currency, exchange_rates = read_reference_data(spark)
+
+        # ----------------------------
+        # Enrichissement devise
+        # ----------------------------
+
+        logger.info("Début de l'enrichissement devise")
+
+        enriched = add_currency_column(enriched, country_currency, exchange_rates)
+
+        logger.info("Enrichissement devise terminé")
+
+        # ----------------------------
+        # Vérification
+        # ----------------------------
 
         logger.info(f"Nombre de lignes : {enriched.count()}")
 
-        enriched.show(10, truncate=False)
+        enriched.printSchema()
+
+        # ----------------------------
+        # Écriture pour writer.py
+        # ----------------------------
+
+        write_intermediate_data(enriched)
+
+        logger.info("Transformer terminé avec succès")
 
     except Exception:
+
         logger.exception("Erreur dans transformer.py")
+
         raise
 
     finally:
+
         spark.stop()
 
 

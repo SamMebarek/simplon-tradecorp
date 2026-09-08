@@ -87,6 +87,25 @@ def read_files(spark, local_paths):
 
 
 # ============================================================
+# Écriture intermédiaire des DataFrames métier
+# ============================================================
+
+
+def write_intermediate_data(
+    dataframes, output_dir="/home/jovyan/data/tmp/reader_output"
+):
+    os.makedirs(output_dir, exist_ok=True)
+
+    for name, df in dataframes.items():
+
+        output_path = os.path.join(output_dir, name)
+
+        logger.info(f"Écriture intermédiaire de {name} vers {output_path}")
+
+        df.write.mode("overwrite").parquet(output_path)
+
+
+# ============================================================
 # Téléchargement des fichiers de référence
 # ============================================================
 
@@ -142,6 +161,7 @@ def read_reference_files(spark, local_paths):
 
 
 # ============================================================
+# Main
 # ============================================================
 
 
@@ -163,6 +183,12 @@ def main():
             logger.info(f"{name} : {df.count()} lignes")
 
         # ----------------------------
+        # Écriture intermédiaire
+        # ----------------------------
+
+        write_intermediate_data(dataframes)
+
+        # ----------------------------
         # Fichiers de référence
         # ----------------------------
 
@@ -174,7 +200,9 @@ def main():
 
         logger.info(f"exchange_rates : " f"{len(exchange_rates['rates'])} devises")
 
-        logger.info("Tous les fichiers ont été téléchargés " "et lus avec succès")
+        logger.info(
+            "Tous les fichiers ont été téléchargés, " "lus et sauvegardés avec succès"
+        )
 
     except Exception:
 
